@@ -1,0 +1,95 @@
+# Session — 2026-07-15
+
+## Goal for today
+Move from planning into building. Get the ESP32 toolchain working, prove each
+subsystem in isolation, and start on the display.
+
+## What I did
+- Installed PlatformIO in VS Code and created the firmware project inside the repo.
+- Wrote a blink program to verify the whole toolchain (compile → link → flash → run).
+- Fixed a driver problem preventing upload (see Problems).
+- Added serial output with an uptime counter — this is now my main debugging tool.
+- Wired the OLED over I2C and confirmed the bus with an address scanner (found 0x3C).
+- Displayed text on the OLED using the Adafruit SSD1306 + GFX libraries.
+- Defined a `PowerReading` struct and a fake `getPowerReading()` so the display can
+  be built before the PZEM is integrated.
+- Replaced blocking `delay()` with `millis()`-based scheduling.
+- Built four display pages: POWER, ENERGY, COST, DETAIL.
+- Added a debounced push button on GPIO4 to cycle pages.
+
+## Decisions made
+- **PlatformIO over Arduino IDE.** Config lives in a plain-text file that Git tracks,
+  libraries are declared per-project rather than installed globally, and the repo's
+  firmware, docs, and dashboard sit in one workspace. Arduino IDE hides its settings
+  in a GUI and has no real project structure.
+- **Arduino framework over ESP-IDF.** ESP-IDF is the professional native framework
+  but much steeper. Arduino has the library ecosystem I need (including the PZEM
+  library) and fits the timeline. ESP-IDF noted as a future learning step.
+- **`PowerReading` struct as an abstraction boundary.** The display and dashboard
+  depend on the function signature, not on where the numbers come from. This means
+  the entire pipeline can be built and tested against fake data now, and the PZEM
+  swaps in later by changing one function body. It also means that when something
+  breaks after integration, I'll know whether it's the PZEM or my code — because my
+  code was already proven against known-good data.
+- **One big value + two small ones, plus a button** for the OLED layout. Rejected
+  showing all five values small (unreadable across a room) and auto-cycling only
+  (you wait for the number you want). A wall-socket device is a glance interface, so
+  page 1 shows POWER large and works without any interaction. The button is a bonus
+  for detail, not a requirement. The dashboard covers the full detail case anyway.
+- **GPIO4 for the button.** Avoided GPIO 6–11 (wired to flash), GPIO 34–39
+  (input-only, no internal pull-up), and GPIO 0/2/5/12/15 (strapping pins — read at
+  reset to decide boot mode, so a button there could stop the board booting).
+  GPIO 21/22 are I2C and 16/17 are reserved for the PZEM.
+
+## Problems hit
+- **Upload failed with "Please specify upload_port".** PlatformIO found no serial
+  ports at all.
+- **Red squiggles under the Adafruit `#include` lines** after adding `lib_deps`,
+  which looked like the build was broken.
+- **`docs/03-design` behaved strangely in Git** — showed as untracked but wouldn't
+  list its contents.
+
+## Solutions implemented
+- **Driver.** The build itself succeeded (RAM 6.4%, flash 18.3%), so the toolchain
+  was fine and the problem was downstream. Device Manager showed "CP2102 USB to UART
+  Bridge Controller" under Other devices with a warning triangle. The fact that
+  Windows had *named the chip* meant the device had enumerated over USB — which
+  requires working data lines. So the cable was fine and the board was alive, and the
+  only remaining cause was a missing driver. Windows Update failed to find one
+  because Windows 10 stopped distributing CP210x drivers in version 2004. Installed
+  the CP210x Universal Windows Driver manually from Silicon Labs; the device moved to
+  Ports (COM & LPT) and upload worked.
+- **Squiggles.** IntelliSense and the compiler are separate systems. `lib_deps` only
+  downloads libraries when you *build*, so IntelliSense was correctly reporting that
+  the headers didn't exist yet. Building fixed it — and pulled in Adafruit BusIO
+  automatically as a transitive dependency.
+- **The folder.** PowerShell's `ls` showed mode `-a----` (archive file) and a length
+  of 211 bytes — directories show `d-----` and have no length. It was a *file* named
+  `03-design`, created by hitting New File instead of New Folder. Renamed it, created
+  the real directory, moved it in as `hardware-pinout.md`.
+
+## Lessons learned
+- The build-time RAM figure PlatformIO prints is a **floor, not a total**. Adding the
+  OLED only added 840 bytes of static RAM even though the frame buffer alone is 1 KB
+   — because the buffer is allocated on the heap at runtime and the compiler can't
+  see it. On a chip with no swap, running out of RAM doesn't throw an exception.
+- **`delay()` blocks everything.** During `delay(500)` the CPU can't check a button,
+  serve a page, or read a sensor. A press that starts and ends inside a delay is
+  invisible. Switching to `millis()` gating is what makes concurrent work possible.
+- **Mechanical switches bounce** for 5–50 ms. At 240 MHz the ESP32 sees one press as
+  five. Software debounce = ignore further transitions until the pin holds steady.
+- **`INPUT_PULLUP` inverts the logic** — released reads HIGH, pressed reads LOW.
+- **Tactile switches have 4 legs but only 2 contacts.** Legs on the same side are
+  permanently joined; you must wire *across* the switch, not along it.
+- **My OLED's pin order is `VCC GND SCL SDA`**, swapped versus most tutorials. Read
+  the silkscreen, never the tutorial diagram.
+- **Comments rot.** After swapping auto-cycle for the button I left a comment saying
+  "temporary — the button will replace this trigger" sitting directly above the
+  button code. A wrong comment is worse than none.
+
+## Next steps
+- Wi-Fi + web dashboard (can be built entirely against fake data).
+- Buy: multimeter, JST-XH 4-pin to Dupont cable, 10 A extension lead, insulated
+  enclosure, WAGO connectors.
+- PZEM integration comes last — it returns nothing until mains is connected, since
+  its VCC/GND pins only power the optocouplers, not the metering chip.
