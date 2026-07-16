@@ -2,6 +2,12 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include "secrets.h"
+
+// ---- WiFi ----
+const unsigned long WIFI_TIMEOUT_MS = 15000;
+bool wifiConnected = false;
 
 // ---- Display ----
 const int SCREEN_WIDTH  = 128;
@@ -10,16 +16,24 @@ const int OLED_RESET    = -1;
 const int OLED_ADDRESS  = 0x3C;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
+// ---- Button ----
+const int BTN_PIN = 4;
+const unsigned long DEBOUNCE_MS = 50;
+
+int lastRawState = HIGH;
+int stableState  = HIGH;
+unsigned long lastChangeTime = 0;
+
+
 // ---- Tariff ----
 const float COST_PER_KWH = 0.30;   // NZD - check your own power bill
 
 // ---- Timing ----
 const unsigned long SENSOR_INTERVAL_MS  = 500;
 const unsigned long DISPLAY_INTERVAL_MS = 250;
-const unsigned long PAGE_CYCLE_MS       = 3000;   // temporary - button replaces this
 unsigned long lastSensorRead  = 0;
 unsigned long lastDisplayDraw = 0;
-unsigned long lastPageChange  = 0;
+
 
 // ---- Pages ----
 enum Page {
@@ -66,6 +80,26 @@ void accumulateEnergy(float watts) {
   accumulatedEnergyKwh += (watts * elapsedMs) / 3600000000.0;
 }
 
+// Returns true once, on the transition from released to pressed.
+bool buttonPressed() {
+  bool fired = false;
+  int raw = digitalRead(BTN_PIN);
+
+  if (raw != lastRawState) {          // pin moved - could be a bounce
+    lastChangeTime = millis();
+    lastRawState = raw;
+  }
+
+  if (millis() - lastChangeTime >= DEBOUNCE_MS) {   // held long enough to be real
+    if (raw != stableState) {
+      stableState = raw;
+      if (stableState == LOW) fired = true;         // falling edge = press
+    }
+  }
+
+  return fired;
+}
+
 // ---- Helpers ----
 void formatElapsed(char* buf, size_t bufLen, unsigned long ms) {
   unsigned long totalSec = ms / 1000;
@@ -77,6 +111,9 @@ void drawHeader(const char* label) {
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print(label);
+
+  display.setCursor(104, 0);
+  display.print(wifiConnected ? "WiFi" : "----");
 }
 
 void drawFooter(const char* text) {
@@ -160,16 +197,43 @@ void drawPage(int page, const PowerReading& r) {
   display.display();
 }
 
+bool connectWiFi() {
+  Serial.printf("Connecting to %s", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_TIMEOUT_MS) {
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Connected. IP: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  }
+
+  Serial.println("WiFi failed - continuing without dashboard");
+  return false;
+}
+
 void setup() {
+  
   Serial.begin(115200);
   delay(1000);
+
+  pinMode(BTN_PIN, INPUT_PULLUP);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
     Serial.println("SSD1306 init failed - halting");
     while (true) { }
   }
-  Serial.println("Smart Energy Monitor - fake data, auto-cycling pages");
+  Serial.println("fake data, button paging");
 
+  wifiConnected = connectWiFi();
+  
   latestReading = getPowerReading();
 }
 
@@ -182,12 +246,12 @@ void loop() {
     accumulateEnergy(latestReading.power);
   }
 
-  // Temporary: auto-cycle. The button will replace this trigger.
-  if (now - lastPageChange >= PAGE_CYCLE_MS) {
-    lastPageChange = now;
-    currentPage = (currentPage + 1) % PAGE_COUNT;
-  }
-
+  // ---- Page cycling ----
+ if (buttonPressed()) {
+  currentPage = (currentPage + 1) % PAGE_COUNT;
+  Serial.printf("Page -> %d\n", currentPage);
+ }
+  // ---- Display update ----
   if (now - lastDisplayDraw >= DISPLAY_INTERVAL_MS) {
     lastDisplayDraw = now;
     drawPage(currentPage, latestReading);
