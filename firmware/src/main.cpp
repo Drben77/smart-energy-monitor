@@ -222,7 +222,8 @@ bool connectWiFi() {
   Serial.println("WiFi failed - continuing without dashboard");
   return false;
 }
-// ---- Web dashboard HTML ----
+
+// ---- Web dashboard ----
 const char INDEX_HTML[] = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -232,34 +233,67 @@ const char INDEX_HTML[] = R"rawliteral(
 <title>Smart Energy Monitor</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#111;color:#eee;font-family:system-ui,sans-serif;
-       padding:24px;max-width:600px;margin:0 auto}
-  h1{font-size:13px;font-weight:500;letter-spacing:.1em;
-     text-transform:uppercase;color:#888;margin-bottom:20px}
-  .power{font-size:64px;font-weight:200;line-height:1}
-  .power span{font-size:22px;color:#888;margin-left:6px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:28px}
-  .cell{background:#1a1a1a;border-radius:8px;padding:14px}
-  .label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.08em}
+  body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;
+       padding:24px;max-width:640px;margin:0 auto}
+  h1{font-size:13px;font-weight:600;letter-spacing:.12em;
+     text-transform:uppercase;color:#7d8590;margin-bottom:20px}
+  h1 b{color:#f0b429}
+  .power{font-size:64px;font-weight:200;line-height:1;
+         background:linear-gradient(90deg,#f0b429,#ff7b54);
+         -webkit-background-clip:text;background-clip:text;color:transparent}
+  .power span{font-size:22px;-webkit-text-fill-color:#7d8590;margin-left:6px}
+  canvas{width:100%;height:120px;margin-top:20px;display:block}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}
+  .cell{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:14px}
+  .label{font-size:10px;text-transform:uppercase;letter-spacing:.08em}
   .value{font-size:22px;margin-top:4px}
-  #status{font-size:11px;color:#666;margin-top:20px}
+  .c1 .label{color:#f0b429}.c2 .label{color:#3fb950}
+  .c3 .label{color:#58a6ff}.c4 .label{color:#ff7b54}
+  .c5 .label{color:#bc8cff}.c6 .label{color:#39c5cf}
+  #status{font-size:11px;color:#7d8590;margin-top:18px}
   .stale{opacity:.35}
 </style>
 </head>
 <body>
-<h1>Smart Energy Monitor</h1>
+<h1><b>&#9679;</b> Smart Energy Monitor</h1>
 <div class="power" id="power">--<span>W</span></div>
+<canvas id="chart" width="600" height="120"></canvas>
 <div class="grid">
-  <div class="cell"><div class="label">Energy</div><div class="value" id="energy">--</div></div>
-  <div class="cell"><div class="label">Cost</div><div class="value" id="cost">--</div></div>
-  <div class="cell"><div class="label">Voltage</div><div class="value" id="voltage">--</div></div>
-  <div class="cell"><div class="label">Current</div><div class="value" id="current">--</div></div>
-  <div class="cell"><div class="label">Power factor</div><div class="value" id="pf">--</div></div>
-  <div class="cell"><div class="label">Frequency</div><div class="value" id="freq">--</div></div>
+  <div class="cell c1"><div class="label">Energy</div><div class="value" id="energy">--</div></div>
+  <div class="cell c2"><div class="label">Cost</div><div class="value" id="cost">--</div></div>
+  <div class="cell c3"><div class="label">Voltage</div><div class="value" id="voltage">--</div></div>
+  <div class="cell c4"><div class="label">Current</div><div class="value" id="current">--</div></div>
+  <div class="cell c5"><div class="label">Power factor</div><div class="value" id="pf">--</div></div>
+  <div class="cell c6"><div class="label">Frequency</div><div class="value" id="freq">--</div></div>
 </div>
 <div id="status">connecting...</div>
 <script>
 const $ = id => document.getElementById(id);
+const history = [];
+const MAX_POINTS = 120;   // 2 minutes at 1 poll/second
+
+function drawChart() {
+  const c = $('chart'), ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (history.length < 2) return;
+
+  const min = Math.min(...history), max = Math.max(...history);
+  const span = (max - min) || 1;            // avoid divide-by-zero on flat data
+  const stepX = c.width / (MAX_POINTS - 1);
+  const y = v => c.height - 6 - ((v - min) / span) * (c.height - 12);
+
+  ctx.beginPath();
+  history.forEach((v, i) => i ? ctx.lineTo(i * stepX, y(v)) : ctx.moveTo(0, y(v)));
+  ctx.strokeStyle = '#f0b429';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.lineTo((history.length - 1) * stepX, c.height);
+  ctx.lineTo(0, c.height);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(240,180,41,0.08)';
+  ctx.fill();
+}
 
 async function update() {
   try {
@@ -267,10 +301,11 @@ async function update() {
     const d = await res.json();
     document.body.classList.remove('stale');
 
-    if (!d.valid) {
-      $('status').textContent = 'sensor not responding';
-      return;
-    }
+    if (!d.valid) { $('status').textContent = 'sensor not responding'; return; }
+
+    history.push(d.power);
+    if (history.length > MAX_POINTS) history.shift();
+    drawChart();
 
     $('power').innerHTML   = d.power.toFixed(0) + '<span>W</span>';
     $('energy').textContent  = d.energy.toFixed(3) + ' kWh';
@@ -279,7 +314,7 @@ async function update() {
     $('current').textContent = d.current.toFixed(2) + ' A';
     $('pf').textContent      = d.powerFactor.toFixed(2);
     $('freq').textContent    = d.frequency.toFixed(1) + ' Hz';
-    $('status').textContent  = 'uptime ' + d.uptime + 's';
+    $('status').textContent  = 'uptime ' + d.uptime + 's · last 2 min shown';
   } catch (e) {
     document.body.classList.add('stale');
     $('status').textContent = 'connection lost';
