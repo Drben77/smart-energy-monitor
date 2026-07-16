@@ -227,6 +227,25 @@ void handleRoot() {
   server.send(200, "text/plain", "Smart Energy Monitor is alive");
 }
 
+void handleData() {
+  const PowerReading& r = latestReading;
+  char json[256];
+
+  if (r.valid) {
+    snprintf(json, sizeof(json),
+      "{\"voltage\":%.1f,\"current\":%.2f,\"power\":%.1f,"
+      "\"energy\":%.4f,\"frequency\":%.1f,\"powerFactor\":%.2f,"
+      "\"cost\":%.2f,\"uptime\":%lu,\"valid\":true}",
+      r.voltage, r.current, r.power, r.energy,
+      r.frequency, r.powerFactor,
+      r.energy * COST_PER_KWH, millis() / 1000);
+  } else {
+    snprintf(json, sizeof(json), "{\"valid\":false}");
+  }
+
+  server.send(200, "application/json", json);
+}
+
 void setup() {
   
   Serial.begin(115200);
@@ -244,6 +263,7 @@ void setup() {
 
   if (wifiConnected) {
     server.on("/", handleRoot);
+    server.on("/data", handleData); 
     server.begin();
     Serial.println("Web server started");
  }
@@ -254,7 +274,7 @@ void setup() {
 void loop() {
 
   if (wifiConnected) server.handleClient();
-  
+
   unsigned long now = millis();
 
   if (now - lastSensorRead >= SENSOR_INTERVAL_MS) {
