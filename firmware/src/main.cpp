@@ -222,9 +222,79 @@ bool connectWiFi() {
   Serial.println("WiFi failed - continuing without dashboard");
   return false;
 }
+// ---- Web dashboard HTML ----
+const char INDEX_HTML[] = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Energy Monitor</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#111;color:#eee;font-family:system-ui,sans-serif;
+       padding:24px;max-width:600px;margin:0 auto}
+  h1{font-size:13px;font-weight:500;letter-spacing:.1em;
+     text-transform:uppercase;color:#888;margin-bottom:20px}
+  .power{font-size:64px;font-weight:200;line-height:1}
+  .power span{font-size:22px;color:#888;margin-left:6px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:28px}
+  .cell{background:#1a1a1a;border-radius:8px;padding:14px}
+  .label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.08em}
+  .value{font-size:22px;margin-top:4px}
+  #status{font-size:11px;color:#666;margin-top:20px}
+  .stale{opacity:.35}
+</style>
+</head>
+<body>
+<h1>Smart Energy Monitor</h1>
+<div class="power" id="power">--<span>W</span></div>
+<div class="grid">
+  <div class="cell"><div class="label">Energy</div><div class="value" id="energy">--</div></div>
+  <div class="cell"><div class="label">Cost</div><div class="value" id="cost">--</div></div>
+  <div class="cell"><div class="label">Voltage</div><div class="value" id="voltage">--</div></div>
+  <div class="cell"><div class="label">Current</div><div class="value" id="current">--</div></div>
+  <div class="cell"><div class="label">Power factor</div><div class="value" id="pf">--</div></div>
+  <div class="cell"><div class="label">Frequency</div><div class="value" id="freq">--</div></div>
+</div>
+<div id="status">connecting...</div>
+<script>
+const $ = id => document.getElementById(id);
+
+async function update() {
+  try {
+    const res = await fetch('/data');
+    const d = await res.json();
+    document.body.classList.remove('stale');
+
+    if (!d.valid) {
+      $('status').textContent = 'sensor not responding';
+      return;
+    }
+
+    $('power').innerHTML   = d.power.toFixed(0) + '<span>W</span>';
+    $('energy').textContent  = d.energy.toFixed(3) + ' kWh';
+    $('cost').textContent    = '$' + d.cost.toFixed(2);
+    $('voltage').textContent = d.voltage.toFixed(1) + ' V';
+    $('current').textContent = d.current.toFixed(2) + ' A';
+    $('pf').textContent      = d.powerFactor.toFixed(2);
+    $('freq').textContent    = d.frequency.toFixed(1) + ' Hz';
+    $('status').textContent  = 'uptime ' + d.uptime + 's';
+  } catch (e) {
+    document.body.classList.add('stale');
+    $('status').textContent = 'connection lost';
+  }
+}
+
+update();
+setInterval(update, 1000);
+</script>
+</body>
+</html>
+)rawliteral";
 
 void handleRoot() {
-  server.send(200, "text/plain", "Smart Energy Monitor is alive");
+  server.send(200, "text/html", INDEX_HTML);
 }
 
 void handleData() {
@@ -246,6 +316,8 @@ void handleData() {
   server.send(200, "application/json", json);
 }
 
+
+
 void setup() {
   
   Serial.begin(115200);
@@ -266,7 +338,7 @@ void setup() {
     server.on("/data", handleData); 
     server.begin();
     Serial.println("Web server started");
- }
+  }
   
   latestReading = getPowerReading();
 }
@@ -287,7 +359,7 @@ void loop() {
  if (buttonPressed()) {
   currentPage = (currentPage + 1) % PAGE_COUNT;
   Serial.printf("Page -> %d\n", currentPage);
- }
+  }
   // ---- Display update ----
   if (now - lastDisplayDraw >= DISPLAY_INTERVAL_MS) {
     lastDisplayDraw = now;
