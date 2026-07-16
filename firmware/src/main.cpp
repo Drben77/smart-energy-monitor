@@ -4,6 +4,7 @@
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
 #include "secrets.h"
+#include <WebServer.h>
 
 // ---- WiFi ----
 const unsigned long WIFI_TIMEOUT_MS = 15000;
@@ -15,6 +16,9 @@ const int SCREEN_HEIGHT = 64;
 const int OLED_RESET    = -1;
 const int OLED_ADDRESS  = 0x3C;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ---- Web server ----
+WebServer server(80);
 
 // ---- Button ----
 const int BTN_PIN = 4;
@@ -219,6 +223,10 @@ bool connectWiFi() {
   return false;
 }
 
+void handleRoot() {
+  server.send(200, "text/plain", "Smart Energy Monitor is alive");
+}
+
 void setup() {
   
   Serial.begin(115200);
@@ -233,11 +241,20 @@ void setup() {
   Serial.println("fake data, button paging");
 
   wifiConnected = connectWiFi();
+
+  if (wifiConnected) {
+    server.on("/", handleRoot);
+    server.begin();
+    Serial.println("Web server started");
+ }
   
   latestReading = getPowerReading();
 }
 
 void loop() {
+
+  if (wifiConnected) server.handleClient();
+  
   unsigned long now = millis();
 
   if (now - lastSensorRead >= SENSOR_INTERVAL_MS) {
