@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include "secrets.h"
 #include <WebServer.h>
+#include <PZEM004Tv30.h>
 
 // ---- WiFi ----
 const unsigned long WIFI_TIMEOUT_MS = 15000;
@@ -19,6 +20,9 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ---- Web server ----
 WebServer server(80);
+
+// ---- PZEM ----
+PZEM004Tv30 pzem(Serial2, 16, 17);   // UART2, RX=GPIO16, TX=GPIO17
 
 // ---- Button ----
 const int BTN_PIN = 4;
@@ -61,28 +65,33 @@ struct PowerReading {
 };
 
 PowerReading latestReading;
-float accumulatedEnergyKwh = 0.0;
-unsigned long lastEnergyTick = 0;
 
 PowerReading getPowerReading() {
   PowerReading r;
-  r.voltage     = 230.0 + random(-30, 31) / 10.0;
-  r.current     = 8.0 + random(-50, 51) / 100.0;
-  r.powerFactor = 0.98;
-  r.power       = r.voltage * r.current * r.powerFactor;
-  r.frequency   = 50.0;
-  r.energy      = accumulatedEnergyKwh;
+
+  float v  = pzem.voltage();
+  float i  = pzem.current();
+  float p  = pzem.power();
+  float e  = pzem.energy();
+  float f  = pzem.frequency();
+  float pf = pzem.pf();
+
+  // The PZEM returns NaN if it can't be read (no mains, bad wiring).
+  if (isnan(v) || isnan(i) || isnan(p)) {
+    r.valid = false;
+    return r;
+  }
+
+  r.voltage     = v;
+  r.current     = i;
+  r.power       = p;
+  r.energy      = e;
+  r.frequency   = f;
+  r.powerFactor = pf;
   r.valid       = true;
   return r;
 }
 
-void accumulateEnergy(float watts) {
-  unsigned long now = millis();
-  if (lastEnergyTick == 0) { lastEnergyTick = now; return; }
-  unsigned long elapsedMs = now - lastEnergyTick;
-  lastEnergyTick = now;
-  accumulatedEnergyKwh += (watts * elapsedMs) / 3600000000.0;
-}
 
 // Returns true once, on the transition from released to pressed.
 bool buttonPressed() {
@@ -356,6 +365,7 @@ void handleData() {
 void setup() {
   
   Serial.begin(115200);
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);
   delay(1000);
 
   pinMode(BTN_PIN, INPUT_PULLUP);
@@ -364,7 +374,7 @@ void setup() {
     Serial.println("SSD1306 init failed - halting");
     while (true) { }
   }
-  Serial.println("fake data, button paging");
+  Serial.println("PZEM live data, button paging");
 
   wifiConnected = connectWiFi();
 
@@ -387,7 +397,6 @@ void loop() {
   if (now - lastSensorRead >= SENSOR_INTERVAL_MS) {
     lastSensorRead = now;
     latestReading = getPowerReading();
-    accumulateEnergy(latestReading.power);
   }
 
   // ---- Page cycling ----
@@ -400,4 +409,15 @@ void loop() {
     lastDisplayDraw = now;
     drawPage(currentPage, latestReading);
   }
+
+  if (now - lastSensorRead >= SENSOR_INTERVAL_MS) {
+    lastSensorRead = now;
+    latestReading = getPowerReading();
+    if (latestReading.valid) {
+      Serial.printf("V=%.1f I=%.2f P=%.1f\n",
+        latestReading.voltage, latestReading.current, latestReading.power);
+    } else {
+      Serial.println("PZEM: no data (NaN)");
+    }
+ }
 }
